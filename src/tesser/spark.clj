@@ -161,47 +161,57 @@
 (def sc (f/spark-context c))
 (def data (f/parallelize sc [0 1 2 3 4 5 6 7 8 9]))
 
-(defn fold-mapper [input-rdd id f post] ;[fold-name fold-args input]
-				(let [x0 (id)
-					;fold (rehydrate-fold fold-name fold-args)
-					;red (:reducer fold)
-					;post (:post-reducer fold)
-				    ] ;call :reducer-identity here
+(defn fold-mapper [input-rdd fold-var fold-args]
+				(let [;fold (rehydrate-fold fold-name fold-args)  ;TODO too late! rehydrate in defsparkfn ?
+				    ] 
 					(-> input-rdd
 						(f/repartition 2)
 						(f/map-partitions-with-index 
 							(f/fn [i xs] 
+               ;TODO deref and compile fold here, extract functions
+               (let [f (-> fold-var
+                           (deref)
+                           (apply fold-args)
+                           (t/compile-fold))
+                     red-id (:reducer-identity f) 
+                     red-func (:reducer f) 
+                     red-post (:post-reducer f)]
 								(.iterator 
-									(vector (vector 0 ;TODO insert key==0 here - or modulo partition?
-										(post (reduce f x0 (iterator-seq xs )) )
-										)))))  ;reduce data here
-						;TODO map on key/values to turn into a rdd of tuples (1,value)
+									(vector (vector 0 ;insert key==0 here - or modulo partition?
+										(red-post (reduce red-func (red-id) (iterator-seq xs )) )
+										))))))  ;reduce data here
+						;TODO map on key/values to turn into a rdd of tuples (0,value)
 						(f/map-to-pair (f/fn [[i x]] (ft/tuple i x) ))
 						;(f/collect)
 						)))
 
 ;(def output (fold-mapper data (constantly 0) + inc))
 
-;TODO remove index from post-reducer output
 ;TODO make sure output of post-reducer has same shape as combiner-identity
 ;TODO mergeValue and mergeCombiner should be identical
 
 ;(def output (f/parallelize-pairs sc [ (tuple 0 25) (tuple 1 26) ]))
 ;(def output (f/parallelize sc [ [0 25] [1 26] ]))
 
-(defn fold-combiner [reduced-rdd id f post] 
+(defn fold-combiner [reduced-rdd fold-var fold-args]
+  (let [f (-> fold-var
+              (deref)
+              (apply fold-args)
+              (t/compile-fold))
+        comb-id (:combiner-identity f) 
+        comb-func (:combiner f)]
 	(-> reduced-rdd
 		(f/combine-by-key
-			(fn [row] (f (id) row) ) ;call id then f on row
-			(fn [acc row] (f acc row) )
-			(fn [acc1 acc2] (f acc1 acc2) )
+			(fn [row] (comb-func (comb-id) row) ) ;call id then f on row
+			(fn [acc row] (comb-func acc row) )
+			(fn [acc1 acc2] (comb-func acc1 acc2) )
 			)
+    ;Remove index from post-reducer output
 		(f/map f/untuple)
 		(f/map last)
-		(f/map post)
-		))
+		)))
 
-(-> data
+'(-> data
 	(fold-mapper (constantly 0) + inc)
 	(fold-combiner (constantly 0) + inc)
 	(f/collect)
@@ -215,15 +225,20 @@
 	"Fold on Spark. One Spark context is created per fold."
 	[sc input workdir fold-var & fold-args]
 	(let [;sc (f/spark-context conf)
-		f (-> fold-var
-			(deref)
-			(apply fold-args)
-			(t/compile-fold))]
+        f (-> fold-var
+              (deref)
+              (apply fold-args)
+              (t/compile-fold))
+        comb-post (:post-combiner f)]
 		(-> sc (f/parallelize input) ;if string -> resolve scheme, if seq -> parallelize
-			(fold-mapper (:reducer-identity f) (:reducer f) (:post-reducer f))
-			(fold-combiner (:combiner-identity f) (:combiner f) (:post-combiner f))
+			;(fold-mapper (:reducer-identity f) (:reducer f) (:post-reducer f))
+			;(fold-combiner (:combiner-identity f) (:combiner f) (:post-combiner f))
+      (fold-mapper fold-var fold-args)
+      (fold-combiner fold-var fold-args)
 			;write to workdir or collect data if workdir is nil
 			(f/collect)
+      first
+      (comb-post)
 			)))
 
 
@@ -249,19 +264,65 @@
 
 (fold sc ;conf
         ;(text/dseq "hdfs:/some/file/part-*")
-        [[1] [2 3]]
-        ;[0 1 2 3 4 5 6 7 8 9]
+        ;[[1] [2 3]] ;=> 6
+        [0 1 2 3 4 5 6 7 8 9]
         ;"hdfs:/tmp/tesser"
         nil ;collect if nil
         #'analyze)
 ;=> 45
 
 
+(defn calc-freqs [] (->> (t/map inc)      ; Increment each number
+                         (t/filter odd?)  ; Take only odd numbers
+                         ;(t/take 5)       ; *which* five odd numbers are selected is arbitrary
+                         (t/mapcat range) ; Explode each odd number n into the numbers from 0 to n
+                         (t/frequencies)  ; Compute the frequency of appearances
+                         ))
+
+(t/tesser (partition 3 (range 100)) (calc-freqs) )
+
+(fold sc ;conf
+        ;(text/dseq "hdfs:/some/file/part-*")
+        (range 100)
+        ;"hdfs:/tmp/tesser"
+        nil ;collect if nil
+        #'calc-freqs)
+
+
+(defn calc [] (->> (t/map inc)      ; Increment each number
+                   (t/filter odd?)  ; Take only odd numbers
+                   ;(t/take 5)       ; *which* five odd numbers are selected is arbitrary
+                   (t/fold +)
+                   ))
+
+(fold sc ;conf
+        ;(text/dseq "hdfs:/some/file/part-*")
+        (range 10)
+        ;[0 1 2 3 4 5 6 7 8 9]
+        ;"hdfs:/tmp/tesser"
+        nil ;collect if nil
+        #'calc)
 
 
 
 
 
+(require '[tesser.core :as t])
+
+(def records [{:year         1986
+               :lines-of-code {"ruby" 100,
+                                "c"    1693}}
+              {:year         2004
+               :lines-of-code {"ruby" 100,
+                                "c"    1693}}
+              ])
+
+(->> ;(t/map #(json/parse-string % true))
+     (t/fuse {:year-range (t/range (t/map :year))
+              :total-code (->> (t/map :lines-of-code)
+                               (t/facet)
+                               (t/reduce + 0))})
+     (t/tesser (partition 2 records)))
 
 
 
