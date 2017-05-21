@@ -281,6 +281,9 @@
 
 (t/tesser (partition 3 (range 100)) (calc-freqs) )
 
+;Returns:
+;{0 50, 65 17, 70 15, 62 19, 74 13, 7 46, 59 20, 86 7, 20 40, 72 14, 58 21, 60 20, 27 36, 1 49, 69 15, 24 38, 55 22, 85 7, 39 30, 88 6, 46 27, 4 48, 77 11, 95 2, 54 23, 92 4, 15 42, 48 26, 50 25, 75 12, 21 39, 31 34, 32 34, 40 30, 91 4, 56 22, 33 33, 13 43, 22 39, 90 5, 36 32, 41 29, 89 5, 43 28, 61 19, 29 35, 44 28, 93 3, 6 47, 28 36, 64 18, 51 24, 25 37, 34 33, 17 41, 3 48, 12 44, 2 49, 66 17, 23 38, 47 26, 35 32, 82 9, 76 12, 97 1, 19 40, 57 21, 68 16, 11 44, 9 45, 5 47, 83 8, 14 43, 45 27, 53 23, 78 11, 26 37, 16 42, 81 9, 79 10, 38 31, 98 1, 87 6, 30 35, 73 13, 96 2, 10 45, 18 41, 52 24, 67 16, 71 14, 42 29, 80 10, 37 31, 63 18, 94 3, 8 46, 49 25, 84 8}
+
 (fold sc ;conf
         ;(text/dseq "hdfs:/some/file/part-*")
         (range 100)
@@ -317,13 +320,23 @@
                                 "c"    1693}}
               ])
 
+(defn report [] (t/fuse {:year-range (t/range (t/map :year))
+                         :total-code (->> (t/map :lines-of-code)
+                                          (t/facet)
+                                          (t/reduce + 0))}))
+
 (->> ;(t/map #(json/parse-string % true))
-     (t/fuse {:year-range (t/range (t/map :year))
-              :total-code (->> (t/map :lines-of-code)
-                               (t/facet)
-                               (t/reduce + 0))})
+     (report)
      (t/tesser (partition 2 records)))
 
+(fold sc ;conf
+        ;(text/dseq "hdfs:/some/file/part-*")
+        records
+        ;"hdfs:/tmp/tesser"
+        nil ;collect if nil
+        #'report)
+
+;=> {:year-range [1986 2004], :total-code {"ruby" 200, "c" 3386}}
 
 
 ;{:reducer-identity  (fn [] ...)

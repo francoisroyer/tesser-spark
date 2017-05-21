@@ -13,6 +13,9 @@
                  [tesser.math "1.0.2"]
                  [org.clojure/data.fressian "0.2.0"]
                  [yieldbot/flambo "0.8.0"]
+                 [org.clojars.achim/multiset "0.1.0-SNAPSHOT"]
+                 [criterium "0.4.3"]
+                 [org.clojure/test.check "0.7.0"]
                  ]
    :profiles {:dev
              ;; so gen-class stuff works in the repl
